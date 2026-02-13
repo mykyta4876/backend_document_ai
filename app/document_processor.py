@@ -36,14 +36,18 @@ class DocumentProcessor:
         """Read file from GCS path (gs://bucket/path)."""
         storage_path = storage_path.replace("gs://", "")
         bucket_name, blob_path = storage_path.split("/", 1)
+        logger.info(f"[DocumentProcessor] Reading from GCS bucket={bucket_name} blob={blob_path}")
         storage_client = storage.Client()
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(blob_path)
-        return blob.download_as_bytes()
+        content = blob.download_as_bytes()
+        logger.info(f"[DocumentProcessor] Read {len(content)} bytes from GCS")
+        return content
 
     def process_document(self, content: bytes, processor_type: str, mime_type: str = "application/pdf"):
         """Call Document AI to process document."""
         processor_name = self._get_processor_name(processor_type)
+        logger.info(f"[DocumentProcessor] Calling Document AI processor={processor_name} content_size={len(content)} mime={mime_type}")
         request = documentai.ProcessRequest(
             name=processor_name,
             raw_document=documentai.RawDocument(
@@ -52,6 +56,7 @@ class DocumentProcessor:
             )
         )
         result = self.client.process_document(request=request)
+        logger.info(f"[DocumentProcessor] Document AI returned document with {len(result.document.text) if result.document.text else 0} chars of text")
         return result.document
 
     def process_form(self, storage_path: str = None, content: bytes = None, mime_type: str = "application/pdf") -> dict:

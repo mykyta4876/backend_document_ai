@@ -7,11 +7,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import logging
+import time
 
 from app.config import settings
 from app.document_processor import DocumentProcessor
 
-logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL))
+logging.basicConfig(
+    level=getattr(logging, settings.LOG_LEVEL),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -27,6 +32,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log every request and response with timing."""
+    start = time.time()
+    logger.info(f">>> REQUEST {request.method} {request.url.path} from {request.client.host if request.client else 'unknown'}")
+    logger.info(f"    Headers: Content-Type={request.headers.get('content-type', 'N/A')}")
+    if request.headers.get("X-API-Key"):
+        logger.info("    X-API-Key: [present]")
+    response = await call_next(request)
+    elapsed = time.time() - start
+    logger.info(f"<<< RESPONSE {response.status_code} in {elapsed:.2f}s")
+    return response
 
 
 def _verify_api_key(x_api_key: Optional[str] = Header(None)):
@@ -56,21 +75,26 @@ async def process_form(
     processor = DocumentProcessor()
     try:
         content_type = request.headers.get("content-type", "")
+        logger.info(f"[process/form] Content-Type: {content_type}")
         if "multipart/form-data" in content_type:
             form = await request.form()
             file = form.get("file")
             if file and hasattr(file, "read"):
                 content = await file.read()
                 mime = getattr(file, "content_type", None) or "application/pdf"
+                logger.info(f"[process/form] Processing uploaded file, size={len(content)} bytes, mime={mime}")
                 result = processor.process_form(content=content, mime_type=mime)
+                logger.info(f"[process/form] Extracted {len([k for k, v in result.items() if v])} fields")
                 return result
             raise HTTPException(status_code=400, detail="File upload required for multipart request")
         body = await request.json()
         storage_path = body.get("storage_path")
         mime_type = body.get("mime_type", "application/pdf")
+        logger.info(f"[process/form] Processing storage_path={storage_path}, mime_type={mime_type}")
         if not storage_path:
             raise HTTPException(status_code=400, detail="storage_path required in JSON body")
         result = processor.process_form(storage_path=storage_path, mime_type=mime_type)
+        logger.info(f"[process/form] Extracted {len([k for k, v in result.items() if v])} fields")
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -95,21 +119,26 @@ async def process_bank_statement(
     processor = DocumentProcessor()
     try:
         content_type = request.headers.get("content-type", "")
+        logger.info(f"[process/bank] Content-Type: {content_type}")
         if "multipart/form-data" in content_type:
             form = await request.form()
             file = form.get("file")
             if file and hasattr(file, "read"):
                 content = await file.read()
                 mime = getattr(file, "content_type", None) or "application/pdf"
+                logger.info(f"[process/bank] Processing uploaded file, size={len(content)} bytes, mime={mime}")
                 result = processor.process_bank_statement(content=content, mime_type=mime)
+                logger.info(f"[process/bank] Extracted {len(result.get('transactions', []))} transactions, {len(result.get('daily_balances', []))} daily balances")
                 return result
             raise HTTPException(status_code=400, detail="File upload required for multipart request")
         body = await request.json()
         storage_path = body.get("storage_path")
         mime_type = body.get("mime_type", "application/pdf")
+        logger.info(f"[process/bank] Processing storage_path={storage_path}, mime_type={mime_type}")
         if not storage_path:
             raise HTTPException(status_code=400, detail="storage_path required in JSON body")
         result = processor.process_bank_statement(storage_path=storage_path, mime_type=mime_type)
+        logger.info(f"[process/bank] Extracted {len(result.get('transactions', []))} transactions, {len(result.get('daily_balances', []))} daily balances")
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
